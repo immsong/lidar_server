@@ -1,8 +1,7 @@
 # Lidar Server
 
 ## 프로젝트 개요
-- LiDAR: Light Detection and Ranging로 거리를 측정하는 센서
-- LiDAR 데이터를 처리하고 제공하는 서버 애플리케이션
+- LiDAR(Light Detection and Ranging, 거리 측정 센서) 데이터를 처리하고 제공하는 서버 애플리케이션
 - 32비트/64비트 Windows 환경 지원
 - MSVC 빌드 시스템 사용
 
@@ -32,12 +31,20 @@
 ## 프로젝트 구조
 ```
 lidar_server/
-├── src/              # 소스 코드
-│   ├── main.rs      # 메인 진입점
-│   └── lib.rs       # 라이브러리 코드
-├── tests/           # 테스트 코드
-├── docs/            # 문서
-└── Cargo.toml       # 프로젝트 설정
+├── src/                # 소스 코드
+│   ├── main.rs         # 메인 진입점
+│   ├── common/         # 공통 데이터
+│   │   ├── data.rs
+│   │   └── mod.rs
+│   ├── udp/            # udp listener
+│   │   ├── listener.rs
+│   │   └── mod.rs
+│   └── ws/             # websocket server
+│   │   ├── server.rs 
+│   │   └── mod.rs
+├── tests/              # 테스트 코드
+├── docs/               # 문서
+└── Cargo.toml          # 프로젝트 설정
 ```
 
 ## 빌드 및 실행
