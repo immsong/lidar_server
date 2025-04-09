@@ -1,14 +1,17 @@
 use crate::lidar::kanavi_mobility::parser::KanaviMobilityParser;
 use crate::lidar::kanavi_mobility::*;
 use crate::lidar::{traits::*, CompanyInfo};
+use bincode::config::standard;
+use bincode::encode_into_slice;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::Mutex;
 use tracing::*;
+
 /// UDP 리스너 구조체
 ///
 /// # 구조체 필드
@@ -114,7 +117,8 @@ impl UdpListener {
                     Ok((size, _src_addr)) => {
                         let data = buf[..size].to_vec();
                         let mut parser_guard = prasers.lock().await;
-                        let mut parse_result: Result<Box<dyn LiDARData>, ()> = Err(());
+                        let parse_result: Result<Box<dyn LiDARData>, ()>;
+
                         // 추후 필요 시 회사 별 구분값에 따라 처리 필요
                         if true || data[0] == 0xFA || _src_addr.port() == 5000 {
                             parser_guard
@@ -142,19 +146,23 @@ impl UdpListener {
                             continue;
                         }
 
+                        let mut final_data = vec![CompanyInfo::KanaviMobility as u8];
                         let data = parse_result.unwrap();
                         match data.get_company_info() {
                             CompanyInfo::KanaviMobility => {
-                                if let Some(kanavi_data) = data.get_data() {
-                                    if let Some(config_data) = kanavi_data.downcast_ref::<KMConfigData>() {
-                                        debug!("parse_result: {:?}", config_data);
-                                    }
+                                let mut encoded_data: Vec<u8> = vec![0u8; 65535];
+                                if let Some(kv_data) = data.as_any().downcast_ref::<KanaviMobilityData>() {
+                                    let _ = encode_into_slice(kv_data, &mut encoded_data, standard());
+                                    final_data.extend_from_slice(&encoded_data);
                                 }
                             }
                             _ => {
                                 error!("Unknown company");
                             }
                         }
+
+                        // send to ws
+                        let _ = udp_to_ws_tx.send(final_data).await;
                     }
                     Err(e) => {
                         eprintln!("Failed to receive data: {}", e);
@@ -177,7 +185,7 @@ impl UdpListener {
                             String::from_utf8(data.clone()).unwrap()
                         );
                         debug!("UDP -> WS data send: {:?}", data);
-                        tx.send(data.clone()).await;
+                        let _ = tx.send(data.clone()).await;
                     }
                     None => {
                         error!("Channel closed");

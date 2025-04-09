@@ -4,15 +4,21 @@ use axum::{
     routing::get,
     Router,
 };
+use bincode::config::standard;
+use bincode::decode_from_slice;
 use bytes::Bytes;
 use futures::{stream::StreamExt, SinkExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::broadcast;
 use tokio::sync::Mutex;
 use tracing::*;
 use uuid::Uuid;
+
+use crate::lidar::{
+    kanavi_mobility::{KMConfigData, KanaviMobilityData},
+    CompanyInfo, LiDARData,
+};
 
 /// WebSocket 서버 구조체
 ///
@@ -93,15 +99,44 @@ impl WsServer {
             loop {
                 match rx.recv().await {
                     Some(data) => {
-                        debug!(
-                            "UDP -> WS data received: {:?}",
-                            String::from_utf8(data.clone()).unwrap()
-                        );
+                        match CompanyInfo::try_from(data[0]) {
+                            Ok(company) => {
+                                match company {
+                                    CompanyInfo::KanaviMobility => {
+                                        let lidar_data: KanaviMobilityData =
+                                            decode_from_slice(&data[1..], standard()).unwrap().0;
+
+                                        if lidar_data.get_points().len() > 0 {
+                                            // point cloud data
+                                            // debug!(
+                                            //     "point cloud data: {:?}",
+                                            //     lidar_data.get_points()
+                                            // );
+                                        } else {
+                                            // config data
+                                            if let Some(config_data) =
+                                                lidar_data.get_data().and_then(|data| {
+                                                    data.downcast_ref::<KMConfigData>()
+                                                })
+                                            {
+                                                debug!("config_data: {:?}", config_data);
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        error!("Unknown company");
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                error!("Failed to convert company info");
+                            }
+                        }
 
                         // response
-                        if let Err(e) = state_clone.broadcast_message(data.clone()).await {
-                            error!("Failed to broadcast message: {}", e);
-                        }
+                        // if let Err(e) = state_clone.broadcast_message(data.clone()).await {
+                        //     error!("Failed to broadcast message: {}", e);
+                        // }
                     }
                     None => {
                         error!("Failed to receive from UDP channel");
