@@ -26,8 +26,8 @@ use tracing::*;
 pub struct UdpListener {
     socket: Arc<UdpSocket>,
     addr: SocketAddr,
-    udp_to_ws_tx: broadcast::Sender<Vec<u8>>,
-    ws_to_udp_rx: broadcast::Receiver<Vec<u8>>,
+    udp_to_ws_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    ws_to_udp_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     parsers: Arc<Mutex<HashMap<CompanyInfo, Box<dyn LiDARParser>>>>,
 }
 
@@ -54,8 +54,8 @@ impl UdpListener {
     /// * 소켓과 채널들을 포함하는 UdpListener 인스턴스 생성
     pub async fn new(
         addr: SocketAddr,
-        udp_to_ws_tx: broadcast::Sender<Vec<u8>>,
-        ws_to_udp_rx: broadcast::Receiver<Vec<u8>>,
+        udp_to_ws_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+        ws_to_udp_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     ) -> Result<Self, std::io::Error> {
         let socket2 = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
         socket2.set_reuse_address(true)?;
@@ -78,7 +78,7 @@ impl UdpListener {
             socket: Arc::new(socket),
             addr,
             udp_to_ws_tx,
-            ws_to_udp_rx,
+            ws_to_udp_rx: Some(ws_to_udp_rx),
             parsers: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -93,7 +93,7 @@ impl UdpListener {
     ///
     /// # 동작 설명
     /// * 두 개의 비동기 태스크를 생성하여 실행:
-    ///   - UDP 수신 태스크: 
+    ///   - UDP 수신 태스크:
     ///     * UDP 소켓으로부터 데이터를 수신
     ///     * LiDAR 데이터 파싱
     ///     * WebSocket으로 전달
@@ -102,10 +102,7 @@ impl UdpListener {
     ///     * UDP로 전송
     /// * 에러 발생 시 로깅 처리
     /// * 양방향 통신의 지속적인 모니터링 및 관리
-    pub async fn start(&self) {
-        let mut buf = vec![0u8; 65535];
-        let ws_to_udp_rx = self.ws_to_udp_rx.resubscribe();
-
+    pub async fn start(&mut self) {
         // UDP 통신
         let recv_socket = Arc::clone(&self.socket);
         let udp_to_ws_tx = self.udp_to_ws_tx.clone();
@@ -167,23 +164,23 @@ impl UdpListener {
         });
 
         // Channel 통신
-        let mut rx = self.ws_to_udp_rx.resubscribe();
+        let mut rx = self.ws_to_udp_rx.take().unwrap();
         let tx = self.udp_to_ws_tx.clone();
         let send_socket = Arc::clone(&self.socket);
         let addr = self.addr;
         let send_handle = tokio::spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(data) => {
+                    Some(data) => {
                         debug!(
                             "WS -> UDP data received: {:?}",
                             String::from_utf8(data.clone()).unwrap()
                         );
                         debug!("UDP -> WS data send: {:?}", data);
-                        tx.send(data.clone()).unwrap();
+                        tx.send(data.clone()).await;
                     }
-                    Err(e) => {
-                        error!("Failed to receive from WS channel: {}", e);
+                    None => {
+                        error!("Channel closed");
                     }
                 }
             }
