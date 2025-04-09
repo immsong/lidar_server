@@ -3,6 +3,7 @@ use crate::lidar::types::*;
 use std::any::Any;
 use std::f32::consts::PI;
 use serde::{Deserialize, Serialize};
+use std::net::Ipv4Addr;
 
 /// 사용자 영역을 나타내는 구조체
 ///
@@ -444,6 +445,7 @@ pub enum KMConfigData {
 /// # Fields
 /// * `raw_data` - 원본 바이트 데이터
 /// * `points` - 포인트 클라우드 데이터
+/// * `ip` - LiDAR의 IP 주소
 /// * `product_line` - 제품 라인
 /// * `lidar_id` - LiDAR ID
 /// * `mode` - 모드
@@ -456,6 +458,7 @@ pub struct KanaviMobilityData {
     points: Vec<PointCloud>,
 
     // Kanavi Mobility 데이터
+    ip: Ipv4Addr,
     product_line: u8,
     lidar_id: u8,
     mode: u8,
@@ -464,10 +467,18 @@ pub struct KanaviMobilityData {
 }
 
 impl KanaviMobilityData {
-    pub fn new(raw_data: Vec<u8>, product_line: u8, lidar_id: u8, mode: u8, param: u8) -> Self {
+    pub fn new(
+        raw_data: Vec<u8>,
+        product_line: u8,
+        lidar_id: u8,
+        mode: u8,
+        param: u8,
+        ip: Ipv4Addr,
+    ) -> Self {
         Self {
             raw_data,
             points: Vec::new(),
+            ip,
             product_line,
             lidar_id,
             mode,
@@ -504,5 +515,19 @@ impl LiDARData for KanaviMobilityData {
 
     fn get_data(&self) -> Option<&dyn Any> {
         self.data.as_ref().map(|data| data as &dyn Any)
+    }
+
+    fn get_key(&self) -> u64 {
+        let octets = self.ip.octets();
+        // IP의 4바이트를 u32로 변환하고, id를 상위 8비트에 배치
+        ((self.lidar_id as u64) << 32)
+            | ((octets[0] as u64) << 24)
+            | ((octets[1] as u64) << 16)
+            | ((octets[2] as u64) << 8)
+            | (octets[3] as u64)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

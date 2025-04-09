@@ -123,10 +123,17 @@ impl UdpListener {
                             parser_guard
                                 .entry(CompanyInfo::KanaviMobility)
                                 .or_insert_with(|| Box::new(KanaviMobilityParser::new()));
+
+                            let ip = if let SocketAddr::V4(addr) = _src_addr {
+                                *addr.ip()
+                            } else {
+                                Ipv4Addr::new(0, 0, 0, 0)
+                            };
+
                             parse_result = parser_guard
                                 .get_mut(&CompanyInfo::KanaviMobility)
                                 .unwrap()
-                                .parse(&data);
+                                .parse(ip, &data);
                         } else {
                             // 추후 필요 시 다른 회사 파서 추가 필요
                             error!("Unknown company");

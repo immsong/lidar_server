@@ -5,10 +5,21 @@ use serde::{Deserialize, Serialize};
 /// # Variants
 /// * `KanaviMobility` - Kanavi Mobility사의 LiDAR
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum CompanyInfo {
-    KanaviMobility,
+pub enum CompanyInfo {    
+    KanaviMobility = 0,
+    Unknown,
 }
 
+impl TryFrom<u8> for CompanyInfo {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(CompanyInfo::KanaviMobility),
+            _ => Ok(CompanyInfo::Unknown),
+        }
+    }
+}
 /// 3차원 공간의 한 점을 나타내는 구조체
 ///
 /// # Fields
