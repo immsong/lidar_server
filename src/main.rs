@@ -1,7 +1,7 @@
 mod common;
+mod lidar;
 mod udp;
 mod ws;
-mod lidar;
 
 use std::net::{SocketAddr, TcpListener};
 use tokio::sync::broadcast;
@@ -48,7 +48,7 @@ fn find_available_port(start_port: u16, max_attempts: u16) -> u16 {
 /// ```
 /// setup_logger()
 /// ```
-/// 
+///
 /// # Arguments
 /// 없음
 ///
@@ -74,7 +74,7 @@ fn setup_logger() {
 
     tracing_subscriber::fmt()
         .with_env_filter(filter)
-        .with_writer(file_appender.and(std::io::stdout)) 
+        .with_writer(file_appender.and(std::io::stdout))
         .with_ansi(false)
         .with_thread_ids(true)
         .with_thread_names(true)
@@ -102,16 +102,16 @@ fn setup_logger() {
 /// 2. 클라이언트 -> WebSocket -> UDP -> LiDAR
 ///
 /// # 채널 구성
-/// * `udp_to_ws`: UDP에서 WebSocket으로의 데이터 전송 (tokio broadcast 채널)
-/// * `ws_to_udp`: WebSocket에서 UDP로의 데이터 전송 (tokio broadcast 채널)
+/// * `udp_to_ws`: UDP에서 WebSocket으로의 데이터 전송 (tokio mpsc 채널, 버퍼 크기: 1)
+/// * `ws_to_udp`: WebSocket에서 UDP로의 데이터 전송 (tokio mpsc 채널, 버퍼 크기: 1)
 #[tokio::main]
 async fn main() {
     setup_logger();
     info!("Start LiDAR Server!");
 
     // UDP <-> WS 양방향 채널 생성
-    let (udp_to_ws_tx, udp_to_ws_rx) = broadcast::channel(16);
-    let (ws_to_udp_tx, ws_to_udp_rx) = broadcast::channel(16);
+    let (udp_to_ws_tx, udp_to_ws_rx) = tokio::sync::mpsc::channel(1);
+    let (ws_to_udp_tx, ws_to_udp_rx) = tokio::sync::mpsc::channel(1);
 
     let start_port = 5555;
     let max_attempts = 10;
@@ -122,13 +122,13 @@ async fn main() {
     }
 
     let ws_addr: SocketAddr = format!("0.0.0.0:{}", ws_port).parse().unwrap();
-    let ws_server = WsServer::new(ws_to_udp_tx, udp_to_ws_rx);
+    let mut ws_server = WsServer::new(ws_to_udp_tx, udp_to_ws_rx);
     let ws_handle = tokio::spawn(async move {
         ws_server.start(ws_addr).await;
     });
 
     let udp_addr: SocketAddr = "0.0.0.0:5000".parse().unwrap();
-    let udp_listener = match UdpListener::new(udp_addr, udp_to_ws_tx, ws_to_udp_rx).await {
+    let mut udp_listener = match UdpListener::new(udp_addr, udp_to_ws_tx, ws_to_udp_rx).await {
         Ok(listener) => listener,
         Err(e) => {
             error!("Failed to create UDP listener: {}", e);

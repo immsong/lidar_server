@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::f32::consts::PI;
+use std::net::Ipv4Addr;
 
 use crate::lidar::kanavi_mobility::types::*;
 use crate::lidar::traits::*;
@@ -40,7 +41,7 @@ impl LiDARParser for KanaviMobilityParser {
     ///    - 0xCF: 설정 데이터 파싱
     ///    - 0xF0: NAK 응답 처리
     ///    - 0xDD: 포인트 클라우드 데이터 처리
-    fn parse(&mut self, data: &[u8]) -> Result<Box<dyn LiDARData>, ()> {
+    fn parse(&mut self, ip: Ipv4Addr, data: &[u8]) -> Result<Box<dyn LiDARData>, ()> {
         self.buffer.extend_from_slice(data);
         if self.buffer.len() < 8 {
             error!("not enough data");
@@ -65,7 +66,7 @@ impl LiDARParser for KanaviMobilityParser {
         let param = self.buffer[4];
 
         let mut lidar_data =
-            KanaviMobilityData::new(data.to_vec(), product_line, lidar_id, mode, param);
+            KanaviMobilityData::new(data.to_vec(), product_line, lidar_id, mode, param, ip);
         let buffer = self.buffer.clone();
 
         match mode {

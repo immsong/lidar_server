@@ -1,15 +1,17 @@
-use crate::lidar::traits::*;
 use crate::lidar::types::*;
+use crate::lidar::traits::*;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::f32::consts::PI;
-use serde::{Deserialize, Serialize};
+use std::net::Ipv4Addr;
+use bincode::{Decode, Encode};
 
 /// 사용자 영역을 나타내는 구조체
 ///
 /// # Fields
 /// * `point_count` - 영역 내 포인트 개수
 /// * `points` - 영역을 구성하는 3차원 점들
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct UserArea {
     point_count: u8,
     points: Vec<Point>,
@@ -69,7 +71,7 @@ impl UserArea {
 /// * `object_size` - 객체 크기
 /// * `area_count` - 사용자 영역 개수
 /// * `areas` - 사용자 영역들
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct BasicConfig {
     output_channel: u8,
     self_check_active_state: u8,
@@ -126,7 +128,7 @@ impl BasicConfig {
 /// * `firmware_version` - 펌웨어 버전
 /// * `hardware_version` - 하드웨어 버전
 /// * `end_target` - 설치 목적
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct VersionInfo {
     firmware_version: [u8; 3],
     hardware_version: [u8; 3],
@@ -151,7 +153,7 @@ impl VersionInfo {
 /// * `subnet_mask` - 서브넷 마스크
 /// * `gateway` - 게이트웨이
 /// * `port` - 포트 번호
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct NetworkSourceInfo {
     ip_address: [u8; 4],
     mac_address: [u8; 6],
@@ -183,7 +185,7 @@ impl NetworkSourceInfo {
 /// # Fields
 /// * `is_set` - 티칭 영역 설정 여부
 /// * `points` - 티칭 영역을 구성하는 3차원 점들
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct TeachingArea {
     is_set: u8,
     points: Vec<Vec<Point>>,
@@ -261,7 +263,7 @@ impl TeachingArea {
 ///
 /// # Fields
 /// * `ip_address` - IP 주소
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct NetworkDestinationIP {
     ip_address: [u8; 4],
 }
@@ -276,7 +278,7 @@ impl NetworkDestinationIP {
 ///
 /// # Fields
 /// * `speed` - 모터 속도
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct MotorSpeed {
     speed: u8,
 }
@@ -293,7 +295,7 @@ impl MotorSpeed {
 /// * `danger_area` - 위험 영역
 /// * `warning_area` - 경고 영역
 /// * `caution_area` - 주의 영역
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct WarningArea {
     danger_area: [u8; 2],
     warning_area: [u8; 2],
@@ -314,7 +316,7 @@ impl WarningArea {
 ///
 /// # Fields
 /// * `filter_value` - 필터 값
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct FogFilter {
     filter_value: u8,
 }
@@ -329,7 +331,7 @@ impl FogFilter {
 ///
 /// # Fields
 /// * `filter_value` - 필터 값
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct RadiusFilter {
     filter_value: u8,
 }
@@ -344,7 +346,7 @@ impl RadiusFilter {
 ///
 /// # Fields
 /// * `max_distance` - 최대 거리
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct RadiusFilterMaxDistance {
     max_distance: u8,
 }
@@ -359,7 +361,7 @@ impl RadiusFilterMaxDistance {
 ///
 /// # Fields
 /// * `mode` - 모드
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct WindowContaminationDetectionMode {
     mode: u8,
 }
@@ -375,7 +377,7 @@ impl WindowContaminationDetectionMode {
 /// # Fields
 /// * `range` - 범위
 /// * `margin` - 마진
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct TeachingMode {
     range: u8,
     margin: u8,
@@ -391,7 +393,7 @@ impl TeachingMode {
 ///
 /// # Fields
 /// * `min_distance` - 최소 거리
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct RadiusFilterMinDistance {
     min_distance: u8,
 }
@@ -420,7 +422,7 @@ impl RadiusFilterMinDistance {
 /// * `RadiusFilterMinDistance` - 최소 오감지 필터 거리
 /// * `Ack` - 정상 응답
 /// * `Nak` - 비정상 응답
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub enum KMConfigData {
     BasicConfig(BasicConfig),
     VersionInfo(VersionInfo),
@@ -444,18 +446,20 @@ pub enum KMConfigData {
 /// # Fields
 /// * `raw_data` - 원본 바이트 데이터
 /// * `points` - 포인트 클라우드 데이터
+/// * `ip` - LiDAR의 IP 주소
 /// * `product_line` - 제품 라인
 /// * `lidar_id` - LiDAR ID
 /// * `mode` - 모드
 /// * `param` - 파라미터
 /// * `data` - 설정 데이터
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize, Encode, Decode)]
 pub struct KanaviMobilityData {
     // 공통 데이터
     raw_data: Vec<u8>,
     points: Vec<PointCloud>,
 
     // Kanavi Mobility 데이터
+    ip: Ipv4Addr,
     product_line: u8,
     lidar_id: u8,
     mode: u8,
@@ -464,10 +468,18 @@ pub struct KanaviMobilityData {
 }
 
 impl KanaviMobilityData {
-    pub fn new(raw_data: Vec<u8>, product_line: u8, lidar_id: u8, mode: u8, param: u8) -> Self {
+    pub fn new(
+        raw_data: Vec<u8>,
+        product_line: u8,
+        lidar_id: u8,
+        mode: u8,
+        param: u8,
+        ip: Ipv4Addr,
+    ) -> Self {
         Self {
             raw_data,
             points: Vec::new(),
+            ip,
             product_line,
             lidar_id,
             mode,
@@ -504,5 +516,19 @@ impl LiDARData for KanaviMobilityData {
 
     fn get_data(&self) -> Option<&dyn Any> {
         self.data.as_ref().map(|data| data as &dyn Any)
+    }
+
+    fn get_key(&self) -> u64 {
+        let octets = self.ip.octets();
+        // IP의 4바이트를 u32로 변환하고, id를 상위 8비트에 배치
+        ((self.lidar_id as u64) << 32)
+            | ((octets[0] as u64) << 24)
+            | ((octets[1] as u64) << 16)
+            | ((octets[2] as u64) << 8)
+            | (octets[3] as u64)
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

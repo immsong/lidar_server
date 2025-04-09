@@ -18,3 +18,4 @@ bytes = "1.10"
 uuid = { version = "1.16", features = ["v4"] }
 network-interface = "2.0.1"
 socket2 = "0.5.1"
+bincode = "2.0.1"

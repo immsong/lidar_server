@@ -1,21 +1,24 @@
 use crate::lidar::kanavi_mobility::parser::KanaviMobilityParser;
 use crate::lidar::kanavi_mobility::*;
 use crate::lidar::{traits::*, CompanyInfo};
+use bincode::config::standard;
+use bincode::encode_into_slice;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::Mutex;
 use tracing::*;
+
 /// UDP 리스너 구조체
 ///
 /// # 구조체 필드
 /// * `socket` - UDP 통신을 위한 소켓
 /// * `addr` - 바인딩된 소켓 주소
-/// * `udp_to_ws_tx` - UDP에서 WebSocket으로 데이터를 전송하는 채널 송신자
-/// * `ws_to_udp_rx` - WebSocket에서 UDP로 데이터를 수신하는 채널 수신자
+/// * `udp_to_ws_tx` - UDP에서 WebSocket으로 데이터를 전송하는 mpsc 채널 송신자
+/// * `ws_to_udp_rx` - WebSocket에서 UDP로 데이터를 수신하는 mpsc 채널 수신자
 /// * `parsers` - LiDAR 회사별 파서를 저장하는 HashMap
 ///
 /// # 주요 기능
@@ -26,8 +29,8 @@ use tracing::*;
 pub struct UdpListener {
     socket: Arc<UdpSocket>,
     addr: SocketAddr,
-    udp_to_ws_tx: broadcast::Sender<Vec<u8>>,
-    ws_to_udp_rx: broadcast::Receiver<Vec<u8>>,
+    udp_to_ws_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    ws_to_udp_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     parsers: Arc<Mutex<HashMap<CompanyInfo, Box<dyn LiDARParser>>>>,
 }
 
@@ -42,8 +45,8 @@ impl UdpListener {
     ///
     /// # Arguments
     /// * `addr` - 바인딩할 소켓 주소
-    /// * `udp_to_ws_tx` - UDP에서 WebSocket으로 데이터를 전송하는 채널 송신자
-    /// * `ws_to_udp_rx` - WebSocket에서 UDP로 데이터를 수신하는 채널 수신자
+    /// * `udp_to_ws_tx` - UDP에서 WebSocket으로 데이터를 전송하는 mpsc 채널 송신자
+    /// * `ws_to_udp_rx` - WebSocket에서 UDP로 데이터를 수신하는 mpsc 채널 수신자
     ///
     /// # Returns
     /// * `Result<Self, std::io::Error>` - 성공 시 UdpListener 인스턴스, 실패 시 IO 에러
@@ -54,8 +57,8 @@ impl UdpListener {
     /// * 소켓과 채널들을 포함하는 UdpListener 인스턴스 생성
     pub async fn new(
         addr: SocketAddr,
-        udp_to_ws_tx: broadcast::Sender<Vec<u8>>,
-        ws_to_udp_rx: broadcast::Receiver<Vec<u8>>,
+        udp_to_ws_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+        ws_to_udp_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     ) -> Result<Self, std::io::Error> {
         let socket2 = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
         socket2.set_reuse_address(true)?;
@@ -78,7 +81,7 @@ impl UdpListener {
             socket: Arc::new(socket),
             addr,
             udp_to_ws_tx,
-            ws_to_udp_rx,
+            ws_to_udp_rx: Some(ws_to_udp_rx),
             parsers: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -93,19 +96,16 @@ impl UdpListener {
     ///
     /// # 동작 설명
     /// * 두 개의 비동기 태스크를 생성하여 실행:
-    ///   - UDP 수신 태스크: 
+    ///   - UDP 수신 태스크:
     ///     * UDP 소켓으로부터 데이터를 수신
-    ///     * LiDAR 데이터 파싱
+    ///     * LiDAR 데이터 파싱 및 인코딩
     ///     * WebSocket으로 전달
     ///   - 채널 통신 태스크:
     ///     * WebSocket으로부터 받은 데이터를 처리
     ///     * UDP로 전송
     /// * 에러 발생 시 로깅 처리
     /// * 양방향 통신의 지속적인 모니터링 및 관리
-    pub async fn start(&self) {
-        let mut buf = vec![0u8; 65535];
-        let ws_to_udp_rx = self.ws_to_udp_rx.resubscribe();
-
+    pub async fn start(&mut self) {
         // UDP 통신
         let recv_socket = Arc::clone(&self.socket);
         let udp_to_ws_tx = self.udp_to_ws_tx.clone();
@@ -117,16 +117,24 @@ impl UdpListener {
                     Ok((size, _src_addr)) => {
                         let data = buf[..size].to_vec();
                         let mut parser_guard = prasers.lock().await;
-                        let mut parse_result: Result<Box<dyn LiDARData>, ()> = Err(());
+                        let parse_result: Result<Box<dyn LiDARData>, ()>;
+
                         // 추후 필요 시 회사 별 구분값에 따라 처리 필요
                         if true || data[0] == 0xFA || _src_addr.port() == 5000 {
                             parser_guard
                                 .entry(CompanyInfo::KanaviMobility)
                                 .or_insert_with(|| Box::new(KanaviMobilityParser::new()));
+
+                            let ip = if let SocketAddr::V4(addr) = _src_addr {
+                                *addr.ip()
+                            } else {
+                                Ipv4Addr::new(0, 0, 0, 0)
+                            };
+
                             parse_result = parser_guard
                                 .get_mut(&CompanyInfo::KanaviMobility)
                                 .unwrap()
-                                .parse(&data);
+                                .parse(ip, &data);
                         } else {
                             // 추후 필요 시 다른 회사 파서 추가 필요
                             error!("Unknown company");
@@ -138,19 +146,23 @@ impl UdpListener {
                             continue;
                         }
 
+                        let mut final_data = vec![CompanyInfo::KanaviMobility as u8];
                         let data = parse_result.unwrap();
                         match data.get_company_info() {
                             CompanyInfo::KanaviMobility => {
-                                if let Some(kanavi_data) = data.get_data() {
-                                    if let Some(config_data) = kanavi_data.downcast_ref::<KMConfigData>() {
-                                        debug!("parse_result: {:?}", config_data);
-                                    }
+                                let mut encoded_data: Vec<u8> = vec![0u8; 65535];
+                                if let Some(kv_data) = data.as_any().downcast_ref::<KanaviMobilityData>() {
+                                    let _ = encode_into_slice(kv_data, &mut encoded_data, standard());
+                                    final_data.extend_from_slice(&encoded_data);
                                 }
                             }
                             _ => {
                                 error!("Unknown company");
                             }
                         }
+
+                        // send to ws
+                        let _ = udp_to_ws_tx.send(final_data).await;
                     }
                     Err(e) => {
                         eprintln!("Failed to receive data: {}", e);
@@ -160,23 +172,23 @@ impl UdpListener {
         });
 
         // Channel 통신
-        let mut rx = self.ws_to_udp_rx.resubscribe();
+        let mut rx = self.ws_to_udp_rx.take().unwrap();
         let tx = self.udp_to_ws_tx.clone();
         let send_socket = Arc::clone(&self.socket);
         let addr = self.addr;
         let send_handle = tokio::spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(data) => {
+                    Some(data) => {
                         debug!(
                             "WS -> UDP data received: {:?}",
                             String::from_utf8(data.clone()).unwrap()
                         );
                         debug!("UDP -> WS data send: {:?}", data);
-                        tx.send(data.clone()).unwrap();
+                        let _ = tx.send(data.clone()).await;
                     }
-                    Err(e) => {
-                        error!("Failed to receive from WS channel: {}", e);
+                    None => {
+                        error!("Channel closed");
                     }
                 }
             }

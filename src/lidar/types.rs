@@ -1,3 +1,4 @@
+use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
 
 /// LiDAR 제조사 정보를 나타내는 열거형
@@ -6,7 +7,19 @@ use serde::{Deserialize, Serialize};
 /// * `KanaviMobility` - Kanavi Mobility사의 LiDAR
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CompanyInfo {
-    KanaviMobility,
+    KanaviMobility = 0,
+    Unknown,
+}
+
+impl TryFrom<u8> for CompanyInfo {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(CompanyInfo::KanaviMobility),
+            _ => Ok(CompanyInfo::Unknown),
+        }
+    }
 }
 
 /// 3차원 공간의 한 점을 나타내는 구조체
@@ -15,7 +28,7 @@ pub enum CompanyInfo {
 /// * `x` - X 좌표
 /// * `y` - Y 좌표
 /// * `z` - Z 좌표
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct Point {
     pub x: f32,
     pub y: f32,
@@ -32,7 +45,7 @@ pub struct Point {
 /// let mut cloud = PointCloud::new();
 /// cloud.add_point(Point { x: 1.0, y: 2.0, z: 3.0 });
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
 pub struct PointCloud {
     pub points: Vec<Point>,
 }

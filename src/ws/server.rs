@@ -1,18 +1,24 @@
 use axum::{
-    extract::{ws::Message, ws::WebSocket, ws::WebSocketUpgrade, ConnectInfo, State},
+    extract::{ws::Message, ws::WebSocket, ws::WebSocketUpgrade, State},
     response::Response,
     routing::get,
     Router,
 };
+use bincode::config::standard;
+use bincode::decode_from_slice;
 use bytes::Bytes;
 use futures::{stream::StreamExt, SinkExt};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::broadcast;
 use tokio::sync::Mutex;
 use tracing::*;
 use uuid::Uuid;
+
+use crate::lidar::{
+    kanavi_mobility::{KMConfigData, KanaviMobilityData},
+    CompanyInfo, LiDARData,
+};
 
 /// WebSocket 서버 구조체
 ///
@@ -24,17 +30,18 @@ use uuid::Uuid;
 /// ```
 ///
 /// # Arguments
-/// * `ws_to_udp_tx` - WebSocket에서 UDP로 메시지를 전송하는 채널
-/// * `udp_to_ws_rx` - UDP에서 WebSocket으로 메시지를 수신하는 채널
+/// * `ws_to_udp_tx` - WebSocket에서 UDP로 메시지를 전송하는 mpsc 채널 송신자
+/// * `udp_to_ws_rx` - UDP에서 WebSocket으로 메시지를 수신하는 mpsc 채널 수신자
 /// * `clients` - 연결된 WebSocket 클라이언트들의 HashMap
 ///
 /// # 주요 기능
 /// * WebSocket 클라이언트 연결 관리
 /// * UDP와 WebSocket 간의 메시지 중계
+/// * LiDAR 데이터 파싱 및 처리
 /// * 클라이언트 간 메시지 브로드캐스트
 pub struct WsServer {
-    ws_to_udp_tx: broadcast::Sender<Vec<u8>>,
-    udp_to_ws_rx: broadcast::Receiver<Vec<u8>>,
+    ws_to_udp_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+    udp_to_ws_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     clients: Arc<Mutex<HashMap<Uuid, futures::stream::SplitSink<WebSocket, Message>>>>,
 }
 
@@ -53,12 +60,12 @@ impl WsServer {
     /// # Returns
     /// * `Self` - 새로운 WsServer 인스턴스
     pub fn new(
-        ws_to_udp_tx: broadcast::Sender<Vec<u8>>,
-        udp_to_ws_rx: broadcast::Receiver<Vec<u8>>,
+        ws_to_udp_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
+        udp_to_ws_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     ) -> Self {
         Self {
             ws_to_udp_tx,
-            udp_to_ws_rx,
+            udp_to_ws_rx: Some(udp_to_ws_rx),
             clients: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -79,32 +86,61 @@ impl WsServer {
     ///
     /// # 동작 설명
     /// * WebSocket 엔드포인트(/ws) 설정
-    /// * UDP 메시지 수신 및 브로드캐스트
+    /// * UDP 메시지 수신 및 처리
     /// * 클라이언트 연결 관리
-    pub async fn start(&self, addr: SocketAddr) {
+    pub async fn start(&mut self, addr: SocketAddr) {
         let state = Arc::new(AppState {
             ws_to_udp_tx: self.ws_to_udp_tx.clone(),
             clients: self.clients.clone(),
         });
 
         let state_clone = state.clone();
-        let mut rx = self.udp_to_ws_rx.resubscribe();
+        let mut rx = self.udp_to_ws_rx.take().unwrap();
         let handle = tokio::spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(data) => {
-                        debug!(
-                            "UDP -> WS data received: {:?}",
-                            String::from_utf8(data.clone()).unwrap()
-                        );
+                    Some(data) => {
+                        match CompanyInfo::try_from(data[0]) {
+                            Ok(company) => {
+                                match company {
+                                    CompanyInfo::KanaviMobility => {
+                                        let lidar_data: KanaviMobilityData =
+                                            decode_from_slice(&data[1..], standard()).unwrap().0;
+
+                                        if lidar_data.get_points().len() > 0 {
+                                            // point cloud data
+                                            // debug!(
+                                            //     "point cloud data: {:?}",
+                                            //     lidar_data.get_points()
+                                            // );
+                                        } else {
+                                            // config data
+                                            if let Some(config_data) =
+                                                lidar_data.get_data().and_then(|data| {
+                                                    data.downcast_ref::<KMConfigData>()
+                                                })
+                                            {
+                                                debug!("config_data: {:?}", config_data);
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        error!("Unknown company");
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                error!("Failed to convert company info");
+                            }
+                        }
 
                         // response
-                        if let Err(e) = state_clone.broadcast_message(data.clone()).await {
-                            error!("Failed to broadcast message: {}", e);
-                        }
+                        // if let Err(e) = state_clone.broadcast_message(data.clone()).await {
+                        //     error!("Failed to broadcast message: {}", e);
+                        // }
                     }
-                    Err(e) => {
-                        error!("Failed to receive from UDP channel: {}", e);
+                    None => {
+                        error!("Failed to receive from UDP channel");
                     }
                 }
             }
@@ -217,7 +253,7 @@ impl WsServer {
 /// ```
 ///
 /// # Arguments
-/// * `ws_to_udp_tx` - WebSocket에서 UDP로의 송신 채널
+/// * `ws_to_udp_tx` - WebSocket에서 UDP로의 mpsc 송신 채널
 /// * `clients` - 연결된 클라이언트들의 HashMap
 ///
 /// # 주요 기능
@@ -225,7 +261,7 @@ impl WsServer {
 /// * 메시지 브로드캐스트
 #[derive(Clone)]
 pub struct AppState {
-    pub ws_to_udp_tx: broadcast::Sender<Vec<u8>>,
+    pub ws_to_udp_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     pub clients: Arc<Mutex<HashMap<Uuid, futures::stream::SplitSink<WebSocket, Message>>>>,
 }
 
