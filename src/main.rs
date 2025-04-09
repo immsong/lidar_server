@@ -1,6 +1,7 @@
 mod common;
 mod udp;
 mod ws;
+mod lidar;
 
 use std::net::{SocketAddr, TcpListener};
 use tokio::sync::broadcast;

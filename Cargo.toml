@@ -16,3 +16,5 @@ futures = "0.3"
 tracing-appender = "0.2"
 bytes = "1.10"
 uuid = { version = "1.16", features = ["v4"] }
+network-interface = "2.0.1"
+socket2 = "0.5.1"
