@@ -30,13 +30,14 @@ use crate::lidar::{
 /// ```
 ///
 /// # Arguments
-/// * `ws_to_udp_tx` - WebSocket에서 UDP로 메시지를 전송하는 채널
-/// * `udp_to_ws_rx` - UDP에서 WebSocket으로 메시지를 수신하는 채널
+/// * `ws_to_udp_tx` - WebSocket에서 UDP로 메시지를 전송하는 mpsc 채널 송신자
+/// * `udp_to_ws_rx` - UDP에서 WebSocket으로 메시지를 수신하는 mpsc 채널 수신자
 /// * `clients` - 연결된 WebSocket 클라이언트들의 HashMap
 ///
 /// # 주요 기능
 /// * WebSocket 클라이언트 연결 관리
 /// * UDP와 WebSocket 간의 메시지 중계
+/// * LiDAR 데이터 파싱 및 처리
 /// * 클라이언트 간 메시지 브로드캐스트
 pub struct WsServer {
     ws_to_udp_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
@@ -85,7 +86,7 @@ impl WsServer {
     ///
     /// # 동작 설명
     /// * WebSocket 엔드포인트(/ws) 설정
-    /// * UDP 메시지 수신 및 브로드캐스트
+    /// * UDP 메시지 수신 및 처리
     /// * 클라이언트 연결 관리
     pub async fn start(&mut self, addr: SocketAddr) {
         let state = Arc::new(AppState {
@@ -252,7 +253,7 @@ impl WsServer {
 /// ```
 ///
 /// # Arguments
-/// * `ws_to_udp_tx` - WebSocket에서 UDP로의 송신 채널
+/// * `ws_to_udp_tx` - WebSocket에서 UDP로의 mpsc 송신 채널
 /// * `clients` - 연결된 클라이언트들의 HashMap
 ///
 /// # 주요 기능

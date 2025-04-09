@@ -102,8 +102,8 @@ fn setup_logger() {
 /// 2. 클라이언트 -> WebSocket -> UDP -> LiDAR
 ///
 /// # 채널 구성
-/// * `udp_to_ws`: UDP에서 WebSocket으로의 데이터 전송 (tokio broadcast 채널)
-/// * `ws_to_udp`: WebSocket에서 UDP로의 데이터 전송 (tokio broadcast 채널)
+/// * `udp_to_ws`: UDP에서 WebSocket으로의 데이터 전송 (tokio mpsc 채널, 버퍼 크기: 1)
+/// * `ws_to_udp`: WebSocket에서 UDP로의 데이터 전송 (tokio mpsc 채널, 버퍼 크기: 1)
 #[tokio::main]
 async fn main() {
     setup_logger();

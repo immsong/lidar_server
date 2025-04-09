@@ -17,8 +17,8 @@ use tracing::*;
 /// # 구조체 필드
 /// * `socket` - UDP 통신을 위한 소켓
 /// * `addr` - 바인딩된 소켓 주소
-/// * `udp_to_ws_tx` - UDP에서 WebSocket으로 데이터를 전송하는 채널 송신자
-/// * `ws_to_udp_rx` - WebSocket에서 UDP로 데이터를 수신하는 채널 수신자
+/// * `udp_to_ws_tx` - UDP에서 WebSocket으로 데이터를 전송하는 mpsc 채널 송신자
+/// * `ws_to_udp_rx` - WebSocket에서 UDP로 데이터를 수신하는 mpsc 채널 수신자
 /// * `parsers` - LiDAR 회사별 파서를 저장하는 HashMap
 ///
 /// # 주요 기능
@@ -45,8 +45,8 @@ impl UdpListener {
     ///
     /// # Arguments
     /// * `addr` - 바인딩할 소켓 주소
-    /// * `udp_to_ws_tx` - UDP에서 WebSocket으로 데이터를 전송하는 채널 송신자
-    /// * `ws_to_udp_rx` - WebSocket에서 UDP로 데이터를 수신하는 채널 수신자
+    /// * `udp_to_ws_tx` - UDP에서 WebSocket으로 데이터를 전송하는 mpsc 채널 송신자
+    /// * `ws_to_udp_rx` - WebSocket에서 UDP로 데이터를 수신하는 mpsc 채널 수신자
     ///
     /// # Returns
     /// * `Result<Self, std::io::Error>` - 성공 시 UdpListener 인스턴스, 실패 시 IO 에러
@@ -98,7 +98,7 @@ impl UdpListener {
     /// * 두 개의 비동기 태스크를 생성하여 실행:
     ///   - UDP 수신 태스크:
     ///     * UDP 소켓으로부터 데이터를 수신
-    ///     * LiDAR 데이터 파싱
+    ///     * LiDAR 데이터 파싱 및 인코딩
     ///     * WebSocket으로 전달
     ///   - 채널 통신 태스크:
     ///     * WebSocket으로부터 받은 데이터를 처리
