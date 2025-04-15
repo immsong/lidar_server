@@ -15,10 +15,7 @@ use tokio::sync::Mutex;
 use tracing::*;
 use uuid::Uuid;
 
-use crate::lidar::{
-    kanavi_mobility::{KMConfigData, KanaviMobilityData},
-    CompanyInfo, LiDARData,
-};
+use crate::lidar::LiDARChannelData;
 
 /// WebSocket 서버 구조체
 ///
@@ -100,44 +97,29 @@ impl WsServer {
             loop {
                 match rx.recv().await {
                     Some(data) => {
-                        match CompanyInfo::try_from(data[0]) {
-                            Ok(company) => {
-                                match company {
-                                    CompanyInfo::KanaviMobility => {
-                                        let lidar_data: KanaviMobilityData =
-                                            decode_from_slice(&data[1..], standard()).unwrap().0;
+                        debug!("Received data length: {}", data.len());
+                        debug!(
+                            "First few bytes: {:?}",
+                            &data[..std::cmp::min(20, data.len())]
+                        );
 
-                                        if lidar_data.get_points().len() > 0 {
-                                            // point cloud data
-                                            // debug!(
-                                            //     "point cloud data: {:?}",
-                                            //     lidar_data.get_points()
-                                            // );
-                                        } else {
-                                            // config data
-                                            if let Some(config_data) =
-                                                lidar_data.get_data().and_then(|data| {
-                                                    data.downcast_ref::<KMConfigData>()
-                                                })
-                                            {
-                                                debug!("config_data: {:?}", config_data);
-                                            }
-                                        }
-                                    }
-                                    _ => {
-                                        error!("Unknown company");
-                                    }
-                                }
+                        match decode_from_slice::<LiDARChannelData, _>(&data, standard()) {
+                            Ok((lidar_channel_data, _)) => {
+                                println!("lidar_channel_ip: {:?}", lidar_channel_data.key.get_ip());
+                                println!(
+                                    "lidar_channel_port: {:?}",
+                                    lidar_channel_data.key.get_port()
+                                );
                             }
-                            Err(_) => {
-                                error!("Failed to convert company info");
+                            Err(e) => {
+                                error!(
+                                    "Failed to decode LiDAR data: {:?}, data length: {}",
+                                    e,
+                                    data.len()
+                                );
+                                continue;
                             }
                         }
-
-                        // response
-                        // if let Err(e) = state_clone.broadcast_message(data.clone()).await {
-                        //     error!("Failed to broadcast message: {}", e);
-                        // }
                     }
                     None => {
                         error!("Failed to receive from UDP channel");

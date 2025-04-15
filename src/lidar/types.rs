@@ -1,5 +1,59 @@
+use std::net::Ipv4Addr;
+
 use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
+pub struct LiDARKey {
+    pub key: u64,
+}
+
+impl LiDARKey {
+    pub fn new(ip: Ipv4Addr, port: u16) -> Self {
+        Self {
+            key: Self::create_key(ip, port),
+        }
+    }
+
+    pub fn get_ip(&self) -> Ipv4Addr {
+        let ip_bytes = [
+            ((self.key >> 40) & 0xFF) as u8,
+            ((self.key >> 32) & 0xFF) as u8,
+            ((self.key >> 24) & 0xFF) as u8,
+            ((self.key >> 16) & 0xFF) as u8,
+        ];
+        Ipv4Addr::new(ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3])
+    }
+
+    pub fn get_port(&self) -> u16 {
+        (self.key & 0xFFFF) as u16
+    }
+
+    fn create_key(ip: Ipv4Addr, port: u16) -> u64 {
+        let ip_bytes = ip.octets();
+
+        ((ip_bytes[0] as u64) << 40) |  // IP 첫 번째 옥텟
+        ((ip_bytes[1] as u64) << 32) |  // IP 두 번째 옥텟
+        ((ip_bytes[2] as u64) << 24) |  // IP 세 번째 옥텟
+        ((ip_bytes[3] as u64) << 16) |  // IP 네 번째 옥텟
+        (port as u64) // Port
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Encode, Decode)]
+pub struct LiDARChannelData {
+    pub key: LiDARKey,
+    pub raw_data: Vec<u8>,
+}
+
+impl LiDARChannelData {
+    pub fn new(key: LiDARKey, raw_data: Vec<u8>) -> Self {
+        Self {
+            key,
+            raw_data,
+        }
+    }
+}
 
 /// LiDAR 제조사 정보를 나타내는 열거형
 ///

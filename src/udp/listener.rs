@@ -1,10 +1,7 @@
-use crate::lidar::kanavi_mobility::parser::KanaviMobilityParser;
-use crate::lidar::kanavi_mobility::*;
-use crate::lidar::{traits::*, CompanyInfo};
+use crate::lidar::{LiDARChannelData, LiDARKey};
 use bincode::config::standard;
 use bincode::encode_into_slice;
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
-use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -19,19 +16,18 @@ use tracing::*;
 /// * `addr` - 바인딩된 소켓 주소
 /// * `udp_to_ws_tx` - UDP에서 WebSocket으로 데이터를 전송하는 mpsc 채널 송신자
 /// * `ws_to_udp_rx` - WebSocket에서 UDP로 데이터를 수신하는 mpsc 채널 수신자
-/// * `parsers` - LiDAR 회사별 파서를 저장하는 HashMap
+/// * `channel_data` - LiDAR UDP 데이터를 저장하는 HashMap
 ///
 /// # 주요 기능
 /// * UDP 소켓을 통한 데이터 수신 및 WebSocket으로의 전달
 /// * WebSocket으로부터 받은 데이터를 UDP로 전송
-/// * LiDAR 데이터 파싱 및 처리
-/// * 양방향 데이터 스트림의 관리 및 에러 처리
+/// * 실제 데이터 파싱 등 처리는 WebSocket 서버에서 수행
 pub struct UdpListener {
     socket: Arc<UdpSocket>,
     addr: SocketAddr,
     udp_to_ws_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     ws_to_udp_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
-    parsers: Arc<Mutex<HashMap<CompanyInfo, Box<dyn LiDARParser>>>>,
+    channel_data: Arc<Mutex<HashMap<LiDARKey, LiDARChannelData>>>,
 }
 
 impl UdpListener {
@@ -60,29 +56,33 @@ impl UdpListener {
         udp_to_ws_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
         ws_to_udp_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     ) -> Result<Self, std::io::Error> {
-        let socket2 = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-        socket2.set_reuse_address(true)?;
-        socket2.bind(&addr.into())?;
-        let socket = UdpSocket::from_std(socket2.into())?;
+        let udp_socket = UdpSocket::bind(addr).await?;
+        
+        // SO_REUSEADDR 및 SO_REUSEPORT 설정
+        let socket2_socket = socket2::Socket::from(udp_socket.into_std()?);
+        socket2_socket.set_reuse_address(true)?;
+        socket2_socket.set_reuse_port(true)?;
+        let socket = UdpSocket::from_std(socket2_socket.into())?;
 
-        // 모든 네트워크 인터페이스 가져오기
+        // 멀티캐스트 설정
         let interfaces = NetworkInterface::show().unwrap();
-
         for interface in interfaces {
-            let vec_addr = interface.addr;
-            for addr in vec_addr {
-                if let network_interface::Addr::V4(ipv4) = addr {
-                    info!("Joining multicast on interface: {}", ipv4.ip);
-                    let _ = socket.join_multicast_v4(Ipv4Addr::new(224, 0, 0, 5), ipv4.ip);
-                }
+            if let Some(network_interface::Addr::V4(ipv4)) = interface
+                .addr
+                .iter()
+                .find(|addr| matches!(addr, network_interface::Addr::V4(_)))
+            {
+                info!("Joining multicast on interface: {}", ipv4.ip);
+                let _ = socket.join_multicast_v4(Ipv4Addr::new(224, 0, 0, 5), ipv4.ip);
             }
         }
+
         Ok(Self {
             socket: Arc::new(socket),
             addr,
             udp_to_ws_tx,
             ws_to_udp_rx: Some(ws_to_udp_rx),
-            parsers: Arc::new(Mutex::new(HashMap::new())),
+            channel_data: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -98,7 +98,7 @@ impl UdpListener {
     /// * 두 개의 비동기 태스크를 생성하여 실행:
     ///   - UDP 수신 태스크:
     ///     * UDP 소켓으로부터 데이터를 수신
-    ///     * LiDAR 데이터 파싱 및 인코딩
+    ///     * 원하는 데이터 크기까지 데이터를 수신
     ///     * WebSocket으로 전달
     ///   - 채널 통신 태스크:
     ///     * WebSocket으로부터 받은 데이터를 처리
@@ -109,60 +109,64 @@ impl UdpListener {
         // UDP 통신
         let recv_socket = Arc::clone(&self.socket);
         let udp_to_ws_tx = self.udp_to_ws_tx.clone();
-        let prasers = self.parsers.clone();
+        let channel_data_arc = Arc::clone(&self.channel_data);
         let recv_handle = tokio::spawn(async move {
             let mut buf = vec![0u8; 65535];
+
             loop {
                 match recv_socket.recv_from(&mut buf).await {
                     Ok((size, _src_addr)) => {
                         let data = buf[..size].to_vec();
-                        let mut parser_guard = prasers.lock().await;
-                        let parse_result: Result<Box<dyn LiDARData>, ()>;
-
-                        // 추후 필요 시 회사 별 구분값에 따라 처리 필요
-                        if true || data[0] == 0xFA || _src_addr.port() == 5000 {
-                            parser_guard
-                                .entry(CompanyInfo::KanaviMobility)
-                                .or_insert_with(|| Box::new(KanaviMobilityParser::new()));
-
-                            let ip = if let SocketAddr::V4(addr) = _src_addr {
-                                *addr.ip()
-                            } else {
-                                Ipv4Addr::new(0, 0, 0, 0)
-                            };
-
-                            parse_result = parser_guard
-                                .get_mut(&CompanyInfo::KanaviMobility)
-                                .unwrap()
-                                .parse(ip, &data);
+                        let ip = if let SocketAddr::V4(addr) = _src_addr {
+                            *addr.ip()
                         } else {
-                            // 추후 필요 시 다른 회사 파서 추가 필요
-                            error!("Unknown company");
-                            parse_result = Err(());
-                        }
+                            Ipv4Addr::new(0, 0, 0, 0)
+                        };
+                        let key = LiDARKey::new(ip, _src_addr.port());
+                        println!("ip: {:?}, port: {:?}", ip, _src_addr.port());
 
-                        if let Err(e) = parse_result {
-                            error!("Failed to parse LiDAR data: {:?}", e);
-                            continue;
-                        }
+                        let mut channel_data_guard = channel_data_arc.lock().await;
+                        channel_data_guard
+                            .entry(key)
+                            .and_modify(|value| {
+                                value.raw_data.extend_from_slice(&data);
+                            })
+                            .or_insert_with(|| LiDARChannelData::new(key, data));
 
-                        let mut final_data = vec![CompanyInfo::KanaviMobility as u8];
-                        let data = parse_result.unwrap();
-                        match data.get_company_info() {
-                            CompanyInfo::KanaviMobility => {
-                                let mut encoded_data: Vec<u8> = vec![0u8; 65535];
-                                if let Some(kv_data) = data.as_any().downcast_ref::<KanaviMobilityData>() {
-                                    let _ = encode_into_slice(kv_data, &mut encoded_data, standard());
-                                    final_data.extend_from_slice(&encoded_data);
+                        if let Some(channel_data) = channel_data_guard.get_mut(&key) {
+                            if channel_data.raw_data.len() < 7 {
+                                error!("kanavi mobility not enough minimum data");
+                                continue;
+                            }
+
+                            // KanaviMobility
+                            if channel_data.raw_data[0] == 0xFA {
+                                let data_len = (channel_data.raw_data[5] as u16) << 8
+                                    | channel_data.raw_data[6] as u16;
+                                let total_len = data_len as usize + 7 + 1;
+                                if channel_data.raw_data.len() < total_len {
+                                    error!("kanavi mobility not enough data");
+                                    continue;
                                 }
-                            }
-                            _ => {
-                                error!("Unknown company");
+
+                                if channel_data.raw_data.len() > total_len {
+                                    error!("kanavi mobility too much data");
+                                    channel_data.raw_data.clear();
+                                    continue;
+                                }
+
+                                let mut encoded_data: Vec<u8> = vec![0u8; 4096];
+                                let size = encode_into_slice(
+                                    &channel_data.clone(),
+                                    &mut encoded_data,
+                                    standard(),
+                                ).unwrap();
+                                let encoded_data = &encoded_data[..size];
+                                let _ = udp_to_ws_tx.send(encoded_data.to_vec()).await;
+                                
+                                channel_data.raw_data.clear();
                             }
                         }
-
-                        // send to ws
-                        let _ = udp_to_ws_tx.send(final_data).await;
                     }
                     Err(e) => {
                         eprintln!("Failed to receive data: {}", e);
