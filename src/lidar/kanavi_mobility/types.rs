@@ -1,10 +1,31 @@
 use crate::lidar::types::*;
-use crate::lidar::traits::*;
+use bincode::{Decode, Encode};
 use serde::{Deserialize, Serialize};
-use std::any::Any;
 use std::f32::consts::PI;
 use std::net::Ipv4Addr;
-use bincode::{Decode, Encode};
+
+#[derive(Debug, Serialize, Deserialize, Encode, Decode, Hash, Eq, PartialEq)]
+pub struct LiDARInfo {
+    pub ip: String,
+    pub port: u16,
+    pub product_line: u8,
+    pub lidar_id: u8,
+}
+
+impl LiDARInfo {
+    pub fn new(ip: Ipv4Addr, port: u16, product_line: u8, lidar_id: u8) -> Self {
+        Self {
+            ip: ip.to_string(),
+            port,
+            product_line,
+            lidar_id,
+        }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
+}
 
 /// 사용자 영역을 나타내는 구조체
 ///
@@ -120,6 +141,10 @@ impl BasicConfig {
             areas,
         }
     }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
 }
 
 /// 버전 정보를 나타내는 구조체
@@ -142,6 +167,10 @@ impl VersionInfo {
             hardware_version,
             end_target,
         }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
     }
 }
 
@@ -178,6 +207,10 @@ impl NetworkSourceInfo {
             port,
         }
     }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
 }
 
 /// 티칭 영역을 나타내는 구조체
@@ -194,6 +227,10 @@ pub struct TeachingArea {
 impl TeachingArea {
     pub fn new(is_set: u8, points: Vec<Vec<Point>>) -> Self {
         Self { is_set, points }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
     }
 
     pub fn parse(product_line: u8, is_set: u8, raw_points: Vec<u8>) -> Self {
@@ -272,6 +309,10 @@ impl NetworkDestinationIP {
     pub fn new(ip_address: [u8; 4]) -> Self {
         Self { ip_address }
     }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
 }
 
 /// 모터 속도를 나타내는 구조체
@@ -286,6 +327,10 @@ pub struct MotorSpeed {
 impl MotorSpeed {
     pub fn new(speed: u8) -> Self {
         Self { speed }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
     }
 }
 
@@ -310,6 +355,10 @@ impl WarningArea {
             caution_area,
         }
     }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
 }
 
 /// 안개 필터를 나타내는 구조체
@@ -324,6 +373,10 @@ pub struct FogFilter {
 impl FogFilter {
     pub fn new(filter_value: u8) -> Self {
         Self { filter_value }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
     }
 }
 
@@ -340,6 +393,10 @@ impl RadiusFilter {
     pub fn new(filter_value: u8) -> Self {
         Self { filter_value }
     }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
 }
 
 /// 최대 오감지 필터 거리를 나타내는 구조체
@@ -355,6 +412,10 @@ impl RadiusFilterMaxDistance {
     pub fn new(max_distance: u8) -> Self {
         Self { max_distance }
     }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
 }
 
 /// 창 오염 감지 모드를 나타내는 구조체
@@ -369,6 +430,10 @@ pub struct WindowContaminationDetectionMode {
 impl WindowContaminationDetectionMode {
     pub fn new(mode: u8) -> Self {
         Self { mode }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
     }
 }
 
@@ -387,6 +452,10 @@ impl TeachingMode {
     pub fn new(range: u8, margin: u8) -> Self {
         Self { range, margin }
     }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
 }
 
 /// 최소 오감지 필터 거리를 나타내는 구조체
@@ -402,133 +471,50 @@ impl RadiusFilterMinDistance {
     pub fn new(min_distance: u8) -> Self {
         Self { min_distance }
     }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
 }
 
-/// Kanavi Mobility LiDAR 설정 데이터 열거형
-///
-/// # Variants
-/// * `BasicConfig` - 기본 설정
-/// * `VersionInfo` - 버전 정보
-/// * `NetworkSourceInfo` - 네트워크 소스 정보
-/// * `TeachingArea` - 티칭 영역
-/// * `NetworkDestinationIP` - 네트워크 목적지 IP
-/// * `MotorSpeed` - 모터 속도
-/// * `WarningArea` - 경고 영역
-/// * `FogFilter` - 안개 필터
-/// * `RadiusFilter` - 오감지 필터
-/// * `RadiusFilterMaxDistance` - 최대 오감지 필터 거리
-/// * `WindowContaminationDetectionMode` - 창 오염 감지 모드
-/// * `TeachingMode` - 티칭 모드
-/// * `RadiusFilterMinDistance` - 최소 오감지 필터 거리
-/// * `Ack` - 정상 응답
-/// * `Nak` - 비정상 응답
 #[derive(Debug, Serialize, Deserialize, Encode, Decode)]
-pub enum KMConfigData {
-    BasicConfig(BasicConfig),
-    VersionInfo(VersionInfo),
-    NetworkSourceInfo(NetworkSourceInfo),
-    TeachingArea(TeachingArea),
-    NetworkDestinationIP(NetworkDestinationIP),
-    MotorSpeed(MotorSpeed),
-    WarningArea(WarningArea),
-    FogFilter(FogFilter),
-    RadiusFilter(RadiusFilter),
-    RadiusFilterMaxDistance(RadiusFilterMaxDistance),
-    WindowContaminationDetectionMode(WindowContaminationDetectionMode),
-    TeachingMode(TeachingMode),
-    RadiusFilterMinDistance(RadiusFilterMinDistance),
-    Ack(u8),
-    Nak(u8),
+pub struct Ack {
+    ack_code: u8,
 }
 
-/// Kanavi Mobility LiDAR 데이터 구조체
-///
-/// # Fields
-/// * `raw_data` - 원본 바이트 데이터
-/// * `points` - 포인트 클라우드 데이터
-/// * `ip` - LiDAR의 IP 주소
-/// * `product_line` - 제품 라인
-/// * `lidar_id` - LiDAR ID
-/// * `mode` - 모드
-/// * `param` - 파라미터
-/// * `data` - 설정 데이터
+impl Ack {
+    pub fn new(ack_code: u8) -> Self {
+        Self { ack_code }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Encode, Decode)]
-pub struct KanaviMobilityData {
-    // 공통 데이터
-    raw_data: Vec<u8>,
-    points: Vec<PointCloud>,
-
-    // Kanavi Mobility 데이터
-    ip: Ipv4Addr,
-    product_line: u8,
-    lidar_id: u8,
-    mode: u8,
-    param: u8,
-    data: Option<KMConfigData>,
+pub struct PointCloudData {
+    pub point_cloud: PointCloud,
+    pub channel: u8,
+    pub detection_value: u8,
 }
 
-impl KanaviMobilityData {
-    pub fn new(
-        raw_data: Vec<u8>,
-        product_line: u8,
-        lidar_id: u8,
-        mode: u8,
-        param: u8,
-        ip: Ipv4Addr,
-    ) -> Self {
-        Self {
-            raw_data,
-            points: Vec::new(),
-            ip,
-            product_line,
-            lidar_id,
-            mode,
-            param,
-            data: None,
-        }
+impl PointCloudData {
+    pub fn new(point_cloud: PointCloud, channel: u8, detection_value: u8) -> Self {
+        Self { point_cloud, channel, detection_value }
     }
 
-    pub fn set_points(&mut self, ch: u8, points: PointCloud) {
-        while self.points.len() <= ch as usize {
-            self.points.push(PointCloud { points: Vec::new() });
-        }
-
-        self.points[ch as usize] = points;
-    }
-
-    pub fn set_data(&mut self, data: KMConfigData) {
-        self.data = Some(data);
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
     }
 }
 
-impl LiDARData for KanaviMobilityData {
-    fn get_raw_data(&self) -> &[u8] {
-        &self.raw_data
-    }
-
-    fn get_company_info(&self) -> CompanyInfo {
-        CompanyInfo::KanaviMobility
-    }
-
-    fn get_points(&self) -> &[PointCloud] {
-        &self.points
-    }
-
-    fn get_data(&self) -> Option<&dyn Any> {
-        self.data.as_ref().map(|data| data as &dyn Any)
-    }
-
-    fn get_key(&self) -> u64 {
-        let octets = self.ip.octets();
-        // IP의 4바이트를 u32로 변환하고, id를 상위 8비트에 배치
-        ((self.lidar_id as u64) << 32)
-            | ((octets[0] as u64) << 24)
-            | ((octets[1] as u64) << 16)
-            | ((octets[2] as u64) << 8)
-            | (octets[3] as u64)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
+// types
+pub mod request_types {
+    pub const REGISTER_LIDAR: &str = "register_lidar";
+    pub const LIDAR_LIST: &str = "lidar_list";
+    pub const RESET_CONFIG: &str = "reset_config";
+    
+    pub const BASIC_CONFIG: &str = "basic_config";
 }
+

@@ -4,18 +4,27 @@ use axum::{
     routing::get,
     Router,
 };
-use bincode::config::standard;
 use bincode::decode_from_slice;
+use bincode::{config::standard, encode_into_slice};
 use bytes::Bytes;
+use core::borrow;
 use futures::{stream::StreamExt, SinkExt};
-use std::collections::HashMap;
+use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::{
+    collections::{HashMap, HashSet},
+    net::Ipv4Addr,
+};
+use tokio::sync::{broadcast, Mutex};
 use tracing::*;
 use uuid::Uuid;
 
-use crate::lidar::LiDARChannelData;
+use crate::lidar::{
+    kanavi_mobility::{request_types, KanaviMobilityWsHandler, KanaviUDPHandler, LiDARInfo},
+    response_status, LiDARChannelData, LiDARKey, RequestMessage, ResponseMessage, UDPHandler,
+    WsHandler,
+};
 
 /// WebSocket 서버 구조체
 ///
@@ -40,6 +49,8 @@ pub struct WsServer {
     ws_to_udp_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     udp_to_ws_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     clients: Arc<Mutex<HashMap<Uuid, futures::stream::SplitSink<WebSocket, Message>>>>,
+    client_lidar_map: Arc<Mutex<HashMap<Uuid, LiDARInfo>>>,
+    lidar_infos: Arc<Mutex<HashSet<LiDARInfo>>>,
 }
 
 impl WsServer {
@@ -64,6 +75,8 @@ impl WsServer {
             ws_to_udp_tx,
             udp_to_ws_rx: Some(udp_to_ws_rx),
             clients: Arc::new(Mutex::new(HashMap::new())),
+            client_lidar_map: Arc::new(Mutex::new(HashMap::new())),
+            lidar_infos: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -89,6 +102,8 @@ impl WsServer {
         let state = Arc::new(AppState {
             ws_to_udp_tx: self.ws_to_udp_tx.clone(),
             clients: self.clients.clone(),
+            client_lidar_map: self.client_lidar_map.clone(),
+            lidar_infos: self.lidar_infos.clone(),
         });
 
         let state_clone = state.clone();
@@ -97,29 +112,41 @@ impl WsServer {
             loop {
                 match rx.recv().await {
                     Some(data) => {
-                        debug!("Received data length: {}", data.len());
-                        debug!(
-                            "First few bytes: {:?}",
-                            &data[..std::cmp::min(20, data.len())]
-                        );
-
+                        let mut res = ResponseMessage::new();
                         match decode_from_slice::<LiDARChannelData, _>(&data, standard()) {
                             Ok((lidar_channel_data, _)) => {
-                                println!("lidar_channel_ip: {:?}", lidar_channel_data.key.get_ip());
-                                println!(
-                                    "lidar_channel_port: {:?}",
-                                    lidar_channel_data.key.get_port()
-                                );
+                                let ip = lidar_channel_data.key.get_ip();
+                                let port = lidar_channel_data.key.get_port();
+                                match KanaviUDPHandler.parse(ip, port, &lidar_channel_data.raw_data)
+                                {
+                                    Ok(json) => {
+                                        if json["status"].to_string() != response_status::NONE {
+                                            res.status = response_status::SUCCESS.to_string();
+                                            res = ResponseMessage::from_json(json);
+                                        }
+
+                                        state_clone.lidar_infos.lock().await.insert(
+                                            serde_json::from_value::<LiDARInfo>(
+                                                res.lidar_info.clone(),
+                                            )
+                                            .unwrap(),
+                                        );
+                                    }
+                                    Err(e) => {
+                                        res.status = response_status::ERROR.to_string();
+                                        res.message = e.to_string();
+                                        error!("Failed to parse LiDAR data: {:?}", e);
+                                    }
+                                }
                             }
                             Err(e) => {
-                                error!(
-                                    "Failed to decode LiDAR data: {:?}, data length: {}",
-                                    e,
-                                    data.len()
-                                );
-                                continue;
+                                res.status = response_status::ERROR.to_string();
+                                res.message = e.to_string();
+                                error!("Failed to decode LiDAR data: {:?}", e);
                             }
                         }
+
+                        let _ = state_clone.broadcast_message(res.to_json()).await;
                     }
                     None => {
                         error!("Failed to receive from UDP channel");
@@ -192,23 +219,67 @@ impl WsServer {
         let state_clone = state.clone();
         let ws_to_udp_task = tokio::spawn(async move {
             while let Some(Ok(msg)) = receiver.next().await {
+                let mut txt_msg = String::new();
+
                 match msg {
                     Message::Text(text) => {
-                        info!("Text message received: {:?}", text);
-                        _ = state_clone.ws_to_udp_tx.send(text.as_bytes().to_vec());
-
-                        // response to all clients
-                        _ = state_clone.broadcast_message(text.as_bytes().to_vec());
+                        txt_msg = text.to_string();
                     }
                     Message::Binary(data) => {
-                        info!("Binary message received: {:?}", data);
-                        _ = state_clone.ws_to_udp_tx.send(data.to_vec());
-
-                        // response to all clients
-                        _ = state_clone.broadcast_message(data.to_vec());
+                        txt_msg = String::from_utf8(data.to_vec()).unwrap();
                     }
                     Message::Close(_) => break,
                     _ => {}
+                }
+
+                match serde_json::from_str::<serde_json::Value>(&txt_msg) {
+                    Ok(json) => {
+                        let ip = Ipv4Addr::new(0, 0, 0, 0);
+                        let port = 5555;
+                        let mut ws_handler =
+                            KanaviMobilityWsHandler::new(state_clone.clone(), client_id);
+                        if let Ok(ret) = ws_handler.parse(ip, port, json).await {
+                            if let Ok(res) = serde_json::from_value::<ResponseMessage>(ret.0.clone()) {
+                                if res.status.to_string() != response_status::NONE {
+                                    _ = state_clone.send_message(client_id, ret.0).await;
+                                }
+
+                                if let Ok(lidar_info) =
+                                    serde_json::from_value::<LiDARInfo>(res.lidar_info.clone())
+                                {
+                                    if ret.1.len() > 0 {
+                                        // make channel data
+                                        let channel_data = LiDARChannelData::new(
+                                            LiDARKey::new(
+                                                lidar_info.ip.parse::<Ipv4Addr>().unwrap(),
+                                                lidar_info.port,
+                                            ),
+                                            ret.1,
+                                        );
+
+                                        let mut encoded_data: Vec<u8> = vec![0u8; 4096];
+                                        let size = encode_into_slice(
+                                            &channel_data.clone(),
+                                            &mut encoded_data,
+                                            standard(),
+                                        )
+                                        .unwrap();
+                                        let encoded_data = &encoded_data[..size];
+                                        _ = state_clone
+                                            .ws_to_udp_tx
+                                            .send(encoded_data.to_vec())
+                                            .await;
+                                    }
+                                } else {
+                                    error!("Failed to send message: {:?}", res.to_json());
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to parse JSON: {}", e);
+                        // 에러 처리
+                    }
                 }
             }
         });
@@ -245,6 +316,8 @@ impl WsServer {
 pub struct AppState {
     pub ws_to_udp_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     pub clients: Arc<Mutex<HashMap<Uuid, futures::stream::SplitSink<WebSocket, Message>>>>,
+    pub client_lidar_map: Arc<Mutex<HashMap<Uuid, LiDARInfo>>>,
+    pub lidar_infos: Arc<Mutex<HashSet<LiDARInfo>>>,
 }
 
 impl AppState {
@@ -252,8 +325,8 @@ impl AppState {
     ///
     /// # Examples
     /// ```
-    /// state.broadcast_message(message).await?;
     /// ```
+    /// state.broadcast_message(message).await?;
     ///
     /// # Arguments
     /// * `message` - 브로드캐스트할 바이너리 메시지
@@ -264,13 +337,27 @@ impl AppState {
     /// # 동작 설명
     /// * 모든 클라이언트에게 동일한 메시지 전송
     /// * 전송 실패 시 에러 로깅
-    pub async fn broadcast_message(&self, message: Vec<u8>) -> Result<(), String> {
+    pub async fn broadcast_message(&self, message: serde_json::Value) -> Result<(), String> {
         let mut clients = self.clients.lock().await;
-        for (_, sender) in clients.iter_mut() {
-            if let Err(e) = sender
-                .send(Message::Binary(Bytes::from(message.clone())))
-                .await
-            {
+        let client_lidar_map = self.client_lidar_map.lock().await;
+
+        for (client, sender) in clients.iter_mut() {
+            if let Some(lidar_info_from_map) = client_lidar_map.get(client) {
+                if lidar_info_from_map.to_json().to_string() == message["lidar_info"].to_string() {
+                    if let Err(e) = sender.send(Message::Text(message.to_string().into())).await {
+                        error!("Failed to send message: {}", e);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn send_message(&self, uuid: Uuid, message: serde_json::Value) -> Result<(), String> {
+        let mut clients = self.clients.lock().await;
+
+        if let Some(sender) = clients.get_mut(&uuid) {
+            if let Err(e) = sender.send(Message::Text(message.to_string().into())).await {
                 error!("Failed to send message: {}", e);
             }
         }

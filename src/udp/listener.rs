@@ -1,9 +1,9 @@
 use crate::lidar::{LiDARChannelData, LiDARKey};
 use bincode::config::standard;
-use bincode::encode_into_slice;
+use bincode::{decode_from_slice, encode_into_slice};
 use network_interface::{NetworkInterface, NetworkInterfaceConfig};
 use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
@@ -57,7 +57,7 @@ impl UdpListener {
         ws_to_udp_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     ) -> Result<Self, std::io::Error> {
         let udp_socket = UdpSocket::bind(addr).await?;
-        
+
         // SO_REUSEADDR 및 SO_REUSEPORT 설정
         let socket2_socket = socket2::Socket::from(udp_socket.into_std()?);
         socket2_socket.set_reuse_address(true)?;
@@ -123,8 +123,6 @@ impl UdpListener {
                             Ipv4Addr::new(0, 0, 0, 0)
                         };
                         let key = LiDARKey::new(ip, _src_addr.port());
-                        println!("ip: {:?}, port: {:?}", ip, _src_addr.port());
-
                         let mut channel_data_guard = channel_data_arc.lock().await;
                         channel_data_guard
                             .entry(key)
@@ -134,36 +132,52 @@ impl UdpListener {
                             .or_insert_with(|| LiDARChannelData::new(key, data));
 
                         if let Some(channel_data) = channel_data_guard.get_mut(&key) {
-                            if channel_data.raw_data.len() < 7 {
-                                error!("kanavi mobility not enough minimum data");
+                            if channel_data.raw_data.is_empty() {
+                                error!("empty data");
                                 continue;
                             }
 
                             // KanaviMobility
                             if channel_data.raw_data[0] == 0xFA {
+                                if channel_data.raw_data.len() < 7 {
+                                    error!("not enough minimum data");
+                                    continue;
+                                }
+
                                 let data_len = (channel_data.raw_data[5] as u16) << 8
                                     | channel_data.raw_data[6] as u16;
                                 let total_len = data_len as usize + 7 + 1;
                                 if channel_data.raw_data.len() < total_len {
-                                    error!("kanavi mobility not enough data");
+                                    // debug!("not enough data");
                                     continue;
                                 }
 
                                 if channel_data.raw_data.len() > total_len {
-                                    error!("kanavi mobility too much data");
+                                    error!("too much data");
                                     channel_data.raw_data.clear();
                                     continue;
                                 }
+
+                                // println!(
+                                //     "ip: {:?}, port: {:?}, len: {:?}",
+                                //     ip,
+                                //     _src_addr.port(),
+                                //     channel_data.raw_data.len()
+                                // );
 
                                 let mut encoded_data: Vec<u8> = vec![0u8; 4096];
                                 let size = encode_into_slice(
                                     &channel_data.clone(),
                                     &mut encoded_data,
                                     standard(),
-                                ).unwrap();
+                                )
+                                .unwrap();
                                 let encoded_data = &encoded_data[..size];
                                 let _ = udp_to_ws_tx.send(encoded_data.to_vec()).await;
-                                
+
+                                channel_data.raw_data.clear();
+                            // } else if channel_data.raw_data[0] == 0x?? { // Other Comapny
+                            } else {
                                 channel_data.raw_data.clear();
                             }
                         }
@@ -179,17 +193,25 @@ impl UdpListener {
         let mut rx = self.ws_to_udp_rx.take().unwrap();
         let tx = self.udp_to_ws_tx.clone();
         let send_socket = Arc::clone(&self.socket);
-        let addr = self.addr;
         let send_handle = tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Some(data) => {
-                        debug!(
-                            "WS -> UDP data received: {:?}",
-                            String::from_utf8(data.clone()).unwrap()
-                        );
-                        debug!("UDP -> WS data send: {:?}", data);
-                        let _ = tx.send(data.clone()).await;
+                        match decode_from_slice::<LiDARChannelData, _>(&data, standard()) {
+                            Ok((lidar_channel_data, _)) => {
+                                let ip = lidar_channel_data.key.get_ip();
+                                let port = lidar_channel_data.key.get_port();
+                                println!("send to: {:?}, {:?}", ip, port);
+                                let _ret = send_socket
+                                    .send_to(&lidar_channel_data.raw_data, SocketAddr::new(IpAddr::V4("224.0.0.5".parse().unwrap()), port))
+                                    .await;
+
+                                println!("send result: {:?}", _ret);
+                            }
+                            Err(e) => {
+                                error!("Failed to decode LiDARChannelData: {}", e);
+                            }
+                        }
                     }
                     None => {
                         error!("Channel closed");

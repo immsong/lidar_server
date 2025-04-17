@@ -48,10 +48,7 @@ pub struct LiDARChannelData {
 
 impl LiDARChannelData {
     pub fn new(key: LiDARKey, raw_data: Vec<u8>) -> Self {
-        Self {
-            key,
-            raw_data,
-        }
+        Self { key, raw_data }
     }
 }
 
@@ -112,4 +109,68 @@ impl PointCloud {
     pub fn add_point(&mut self, point: Point) {
         self.points.push(point);
     }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
 }
+
+pub mod request_command {
+    pub const GET: &str = "get";
+    pub const SET: &str = "set";
+}
+
+// Request types
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RequestMessage {
+    pub lidar_info: serde_json::Value,
+    pub command: String, // request_command
+    pub r#type: String,
+    pub data: Option<serde_json::Value>,
+}
+
+impl RequestMessage {
+    pub fn new() -> Self {
+        Self {
+            lidar_info: serde_json::Value::Null,
+            command: "".to_string(),
+            r#type: "".to_string(),
+            data: None,
+        }
+    }
+}
+
+pub mod response_status {
+    pub const SUCCESS: &str = "success";
+    pub const ERROR: &str = "error";
+    pub const NONE: &str = "none";
+}
+
+// Response types
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ResponseMessage {
+    pub lidar_info: serde_json::Value,
+    pub status: String, // response_status
+    pub message: String,
+    pub data: Option<serde_json::Value>,
+}
+
+impl ResponseMessage {
+    pub fn new() -> Self {
+        Self {
+            lidar_info: serde_json::Value::Null,
+            status: "".to_string(),
+            message: "".to_string(),
+            data: None,
+        }
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
+
+    pub fn from_json(json: serde_json::Value) -> Self {
+        serde_json::from_value(json).unwrap()
+    }
+}
+
